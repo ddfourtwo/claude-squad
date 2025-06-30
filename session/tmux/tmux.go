@@ -90,7 +90,14 @@ func (t *TmuxSession) Start(workDir string) error {
 	}
 
 	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	// If the program contains spaces, we need to use shell to execute it properly
+	var cmd *exec.Cmd
+	if strings.Contains(t.program, " ") {
+		// Use sh -c to handle commands with arguments
+		cmd = exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, "sh", "-c", t.program)
+	} else {
+		cmd = exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	}
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {

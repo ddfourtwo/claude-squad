@@ -4,6 +4,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
+	"io"
 	"path/filepath"
 
 	"fmt"
@@ -51,6 +52,8 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// ClaudeResume indicates if this instance should start with claude --resume
+	ClaudeResume bool
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -191,6 +194,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Don't modify the program for ClaudeResume - we'll handle it differently
 	tmuxSession := tmux.NewTmuxSession(i.Title, i.Program)
 	i.tmuxSession = tmuxSession
 
@@ -239,7 +243,19 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 	}
 
+	// If ClaudeResume is set, prepare conversations before starting
+	if i.ClaudeResume && strings.Contains(i.Program, "claude") && firstTimeSetup {
+		// Copy Claude conversations from the original project to the worktree
+		// Do this BEFORE Claude starts so they're available immediately
+		if err := prepareClaudeConversations(i.Path, i.gitWorktree.GetWorktreePath()); err != nil {
+			log.ErrorLog.Printf("Failed to prepare Claude conversations: %v", err)
+		} else {
+			log.InfoLog.Printf("Successfully prepared Claude conversations for worktree")
+		}
+	}
+	
 	i.SetStatus(Running)
+	
 
 	return nil
 }
@@ -493,6 +509,225 @@ func (i *Instance) UpdateDiffStats() error {
 // GetDiffStats returns the current git diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// prepareClaudeConversations creates the Claude directory and copies conversations before Claude starts
+func prepareClaudeConversations(sourceProjectPath, targetProjectPath string) error {
+	// Get the source Claude directory (simple conversion for regular projects)
+	sourceClaudePath := filepath.Join(os.Getenv("HOME"), ".claude", "projects", 
+		"-" + strings.ReplaceAll(sourceProjectPath, "/", "-")[1:])
+	
+	// Check if source directory exists
+	if _, err := os.Stat(sourceClaudePath); os.IsNotExist(err) {
+		log.InfoLog.Printf("No Claude conversations found at: %s", sourceClaudePath)
+		return nil
+	}
+	
+	// Create the target Claude directory path (complex conversion for worktrees)
+	targetClaudePath := getClaudeProjectPath(targetProjectPath)
+	
+	log.InfoLog.Printf("Copying conversations:")
+	log.InfoLog.Printf("  From: %s", sourceClaudePath)
+	log.InfoLog.Printf("  To:   %s", targetClaudePath)
+	
+	// Create the directory
+	if err := os.MkdirAll(targetClaudePath, 0755); err != nil {
+		return fmt.Errorf("failed to create target Claude directory: %w", err)
+	}
+	
+	// Copy conversation files
+	sourceFiles, err := os.ReadDir(sourceClaudePath)
+	if err != nil {
+		return fmt.Errorf("failed to read source directory: %w", err)
+	}
+	
+	copiedCount := 0
+	for _, file := range sourceFiles {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".jsonl") {
+			sourcePath := filepath.Join(sourceClaudePath, file.Name())
+			targetPath := filepath.Join(targetClaudePath, file.Name())
+			
+			// Use the new function that updates cwd paths
+			if err := copyAndUpdateConversation(sourcePath, targetPath, sourceProjectPath, targetProjectPath); err != nil {
+				log.ErrorLog.Printf("Failed to copy %s: %v", file.Name(), err)
+				continue
+			}
+			copiedCount++
+		}
+	}
+	
+	log.InfoLog.Printf("Copied %d conversations to %s (with updated cwd paths)", copiedCount, targetClaudePath)
+	return nil
+}
+
+// copyClaudeConversationsToWorktree copies conversations to the Claude directory for the worktree
+func copyClaudeConversationsToWorktree(sourceProjectPath, targetProjectPath string) error {
+	// Get the source Claude directory
+	sourceClaudePath := getClaudeProjectPath(sourceProjectPath)
+	
+	// Check if source directory exists
+	if _, err := os.Stat(sourceClaudePath); os.IsNotExist(err) {
+		log.InfoLog.Printf("No Claude conversations found for source project: %s", sourceProjectPath)
+		return nil
+	}
+	
+	// Find all possible Claude directories for the worktree
+	homeDir, _ := os.UserHomeDir()
+	claudeProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+	
+	// List all directories to find the one Claude created for this worktree
+	entries, err := os.ReadDir(claudeProjectsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read Claude projects directory: %w", err)
+	}
+	
+	// Find directories that contain the worktree path
+	// Claude replaces underscores with dashes, so we need to check both
+	worktreeBasename := filepath.Base(targetProjectPath)
+	worktreeBasenameDashed := strings.ReplaceAll(worktreeBasename, "_", "-")
+	
+	for _, entry := range entries {
+		if entry.IsDir() && (strings.Contains(entry.Name(), worktreeBasename) || 
+			strings.Contains(entry.Name(), worktreeBasenameDashed)) {
+			targetClaudePath := filepath.Join(claudeProjectsDir, entry.Name())
+			log.InfoLog.Printf("Found Claude directory for worktree: %s", targetClaudePath)
+			
+			// Copy conversation files
+			sourceFiles, err := os.ReadDir(sourceClaudePath)
+			if err != nil {
+				log.ErrorLog.Printf("Failed to read source directory %s: %v", sourceClaudePath, err)
+				continue
+			}
+			
+			for _, file := range sourceFiles {
+				if !file.IsDir() && strings.HasSuffix(file.Name(), ".jsonl") {
+					sourcePath := filepath.Join(sourceClaudePath, file.Name())
+					targetPath := filepath.Join(targetClaudePath, file.Name())
+					
+					if err := copyFile(sourcePath, targetPath); err != nil {
+						log.ErrorLog.Printf("Failed to copy %s: %v", file.Name(), err)
+						continue
+					}
+					log.InfoLog.Printf("Copied conversation: %s", file.Name())
+				}
+			}
+			
+			return nil
+		}
+	}
+	
+	log.WarningLog.Printf("Could not find Claude directory for worktree %s", worktreeBasename)
+	return fmt.Errorf("Claude directory not found for worktree")
+}
+
+// copyClaudeConversations copies Claude conversation files from source to target project
+func copyClaudeConversations(sourceProjectPath, targetProjectPath string) error {
+	// Convert paths to Claude's format
+	sourceClaudePath := getClaudeProjectPath(sourceProjectPath)
+	targetClaudePath := getClaudeProjectPath(targetProjectPath)
+	
+	log.InfoLog.Printf("Source Claude path: %s", sourceClaudePath)
+	log.InfoLog.Printf("Target Claude path: %s", targetClaudePath)
+	
+	// Check if source directory exists
+	if _, err := os.Stat(sourceClaudePath); os.IsNotExist(err) {
+		log.InfoLog.Printf("No Claude conversations found for source project: %s", sourceProjectPath)
+		return nil
+	}
+	
+	// Create target directory if it doesn't exist
+	if err := os.MkdirAll(targetClaudePath, 0755); err != nil {
+		return fmt.Errorf("failed to create target Claude directory: %w", err)
+	}
+	
+	// Read all files from source directory
+	entries, err := os.ReadDir(sourceClaudePath)
+	if err != nil {
+		return fmt.Errorf("failed to read source Claude directory: %w", err)
+	}
+	
+	// Copy each .jsonl file
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			sourcePath := filepath.Join(sourceClaudePath, entry.Name())
+			targetPath := filepath.Join(targetClaudePath, entry.Name())
+			
+			if err := copyFile(sourcePath, targetPath); err != nil {
+				log.ErrorLog.Printf("Failed to copy conversation %s: %v", entry.Name(), err)
+				continue
+			}
+			log.InfoLog.Printf("Copied conversation: %s", entry.Name())
+		}
+	}
+	
+	return nil
+}
+
+// getClaudeProjectPath converts a project path to Claude's storage format
+func getClaudeProjectPath(projectPath string) string {
+	// Convert absolute path to Claude's format
+	// Claude replaces ALL special characters with dashes, including dots and underscores
+	cleanPath := projectPath
+	
+	// Replace forward slashes with dashes
+	cleanPath = strings.ReplaceAll(cleanPath, "/", "-")
+	
+	// Replace dots with dashes (e.g., .claude-squad becomes -claude-squad)
+	cleanPath = strings.ReplaceAll(cleanPath, ".", "-")
+	
+	// Replace underscores with dashes in the final component
+	parts := strings.Split(cleanPath, "-")
+	if len(parts) > 0 {
+		parts[len(parts)-1] = strings.ReplaceAll(parts[len(parts)-1], "_", "-")
+	}
+	cleanPath = strings.Join(parts, "-")
+	
+	// Ensure we start with a dash
+	if !strings.HasPrefix(cleanPath, "-") {
+		cleanPath = "-" + cleanPath
+	}
+	
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".claude", "projects", cleanPath)
+}
+
+// copyFile copies a file from source to destination
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+	
+	_, err = io.Copy(destFile, sourceFile)
+	return err
+}
+
+// copyAndUpdateConversation copies a conversation file and updates cwd paths
+func copyAndUpdateConversation(src, dst, oldCwd, newCwd string) error {
+	// Read the source file
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("failed to read source file: %w", err)
+	}
+	
+	// Replace all occurrences of the old cwd with the new cwd
+	updatedContent := strings.ReplaceAll(string(content), 
+		fmt.Sprintf(`"cwd":"%s"`, oldCwd), 
+		fmt.Sprintf(`"cwd":"%s"`, newCwd))
+	
+	// Write to destination
+	if err := os.WriteFile(dst, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write destination file: %w", err)
+	}
+	
+	return nil
 }
 
 // SendPrompt sends a prompt to the tmux session

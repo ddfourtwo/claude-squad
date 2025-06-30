@@ -69,6 +69,9 @@ type home struct {
 
 	// promptAfterName tracks if we should enter prompt mode after naming
 	promptAfterName bool
+	
+	// claudeResumeAfterName tracks if we should show Claude resume selector after naming
+	claudeResumeAfterName bool
 
 	// keySent is used to manage underlining menu items
 	keySent bool
@@ -309,6 +312,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			m.state = stateDefault
 			m.promptAfterName = false
+			m.claudeResumeAfterName = false
 			m.list.Kill()
 			return m, tea.Sequence(
 				tea.WindowSize(),
@@ -342,7 +346,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				instance.AutoYes = true
 			}
 
-			m.newInstanceFinalizer()
 			m.state = stateDefault
 			if m.promptAfterName {
 				m.state = statePrompt
@@ -350,6 +353,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				// Initialize the text input overlay
 				m.textInputOverlay = overlay.NewTextInputOverlay("Enter prompt", "")
 				m.promptAfterName = false
+			} else if m.claudeResumeAfterName {
+				// Instance will start with claude --resume automatically
+				m.claudeResumeAfterName = false
+				m.menu.SetState(ui.StateDefault)
+				m.showHelpScreen(helpTypeInstanceStart, nil)
 			} else {
 				m.menu.SetState(ui.StateDefault)
 				m.showHelpScreen(helpTypeInstanceStart, nil)
@@ -485,6 +493,30 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
+
+		return m, nil
+	case keys.KeyClaudeResume:
+		if m.list.NumInstances() >= GlobalInstanceLimit {
+			return m, m.handleError(
+				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+		}
+		instance, err := session.NewInstance(session.InstanceOptions{
+			Title:   "",
+			Path:    ".",
+			Program: m.program,
+		})
+		if err != nil {
+			return m, m.handleError(err)
+		}
+		
+		// Set the ClaudeResume flag on the instance
+		instance.ClaudeResume = true
+
+		m.newInstanceFinalizer = m.list.AddInstance(instance)
+		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+		m.state = stateNew
+		m.menu.SetState(ui.StateNewInstance)
+		m.claudeResumeAfterName = true
 
 		return m, nil
 	case keys.KeyUp:
@@ -733,3 +765,4 @@ func (m *home) View() string {
 
 	return mainView
 }
+
