@@ -357,7 +357,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				// Instance will start with claude --resume automatically
 				m.claudeResumeAfterName = false
 				m.menu.SetState(ui.StateDefault)
-				m.showHelpScreen(helpTypeInstanceStart, nil)
+				m.showHelpScreen(helpTypeInstanceStart{instance: instance}, nil)
 			} else {
 				m.menu.SetState(ui.StateDefault)
 				m.showHelpScreen(helpStart(instance), nil)
