@@ -360,7 +360,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.showHelpScreen(helpTypeInstanceStart, nil)
 			} else {
 				m.menu.SetState(ui.StateDefault)
-				m.showHelpScreen(helpTypeInstanceStart, nil)
+				m.showHelpScreen(helpStart(instance), nil)
 			}
 
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
@@ -403,13 +403,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Check if the form was submitted or canceled
 		if shouldClose {
+			selected := m.list.GetSelectedInstance()
+			// TODO: this should never happen since we set the instance in the previous state.
+			if selected == nil {
+				return m, nil
+			}
 			if m.textInputOverlay.IsSubmitted() {
-				// Form was submitted, process the input
-				selected := m.list.GetSelectedInstance()
-				if selected == nil {
-					return m, nil
-				}
 				if err := selected.SendPrompt(m.textInputOverlay.GetValue()); err != nil {
+					// TODO: we probably end up in a bad state here.
 					return m, m.handleError(err)
 				}
 			}
@@ -421,7 +422,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				tea.WindowSize(),
 				func() tea.Msg {
 					m.menu.SetState(ui.StateDefault)
-					m.showHelpScreen(helpTypeInstanceStart, nil)
+					m.showHelpScreen(helpStart(selected), nil)
 					return nil
 				},
 			)
@@ -453,7 +454,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	switch name {
 	case keys.KeyHelp:
-		return m.showHelpScreen(helpTypeGeneral, nil)
+		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -605,7 +606,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout, func() {
+		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
 			if err := selected.Pause(); err != nil {
 				m.handleError(err)
 			}
@@ -630,7 +631,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach, func() {
+		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 			ch, err := m.list.Attach()
 			if err != nil {
 				m.handleError(err)
