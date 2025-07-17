@@ -1,8 +1,10 @@
 package git
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +46,12 @@ func (g *GitWorktree) SetupFromExistingBranch() error {
 	// Create a new worktree from the existing branch
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
 		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
+	}
+
+	// Copy configured files after worktree is created
+	if err := g.copyConfiguredFiles(); err != nil {
+		log.ErrorLog.Printf("Failed to copy configured files: %v", err)
+		// Don't fail the entire setup just because file copying failed
 	}
 
 	return nil
@@ -89,6 +97,12 @@ func (g *GitWorktree) SetupNewWorktree() error {
 	// TODO: we might want to give an option to use main/master instead of the current branch.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
 		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
+	}
+
+	// Copy configured files after worktree is created
+	if err := g.copyConfiguredFiles(); err != nil {
+		log.ErrorLog.Printf("Failed to copy configured files: %v", err)
+		// Don't fail the entire setup just because file copying failed
 	}
 
 	return nil
@@ -220,6 +234,79 @@ func CleanupWorktrees() error {
 	_, err = cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
+	}
+
+	return nil
+}
+
+// copyConfiguredFiles copies files specified in the configuration from the repo to the worktree
+func (g *GitWorktree) copyConfiguredFiles() error {
+	cfg := config.LoadConfig()
+	if len(cfg.CopyOnCreate) == 0 {
+		// No files to copy
+		return nil
+	}
+
+	log.InfoLog.Printf("Copying configured files to worktree...")
+
+	for _, filePath := range cfg.CopyOnCreate {
+		// Construct source and destination paths
+		srcPath := filepath.Join(g.repoPath, filePath)
+		dstPath := filepath.Join(g.worktreePath, filePath)
+
+		// Check if source file exists
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			log.InfoLog.Printf("Skipping %s (not found in source repository)", filePath)
+			continue
+		} else if err != nil {
+			log.ErrorLog.Printf("Error checking file %s: %v", filePath, err)
+			continue
+		}
+
+		// Create destination directory if needed
+		dstDir := filepath.Dir(dstPath)
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			log.ErrorLog.Printf("Failed to create directory for %s: %v", filePath, err)
+			continue
+		}
+
+		// Copy the file
+		if err := copyFile(srcPath, dstPath); err != nil {
+			log.ErrorLog.Printf("Failed to copy %s: %v", filePath, err)
+			continue
+		}
+
+		log.InfoLog.Printf("Copied %s to worktree", filePath)
+	}
+
+	return nil
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	// Open source file
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	// Get source file info to preserve permissions
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat source file: %w", err)
+	}
+
+	// Create destination file
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer dstFile.Close()
+
+	// Copy the contents
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return fmt.Errorf("failed to copy file contents: %w", err)
 	}
 
 	return nil

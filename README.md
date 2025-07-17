@@ -116,6 +116,43 @@ The menu at the bottom of the screen shows available commands:
 
 If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
 underlying program (ex. `claude`) to the latest version.
+### Configuration
+
+Claude Squad stores its configuration in `~/.claude-squad/config.json`. You can view the location and current configuration by running `cs debug`.
+
+#### Configuration Options
+
+- `default_program` - The default program to run in new instances (e.g., "claude", "aider", "codex")
+- `auto_yes` - If true, automatically accept all prompts (default: false)
+- `daemon_poll_interval` - Polling interval in milliseconds for auto-yes mode (default: 1000)
+- `branch_prefix` - Prefix for created git branches (default: "{username}/")
+- `copy_on_create` - List of files to copy from the main repository to new workspaces (default: [])
+
+#### Copying Files to New Workspaces
+
+By default, Claude Squad creates clean git worktrees without gitignored files like `.env`. To automatically copy specific files when creating new spaces, add them to the `copy_on_create` configuration:
+
+```json
+{
+  "default_program": "claude",
+  "auto_yes": false,
+  "daemon_poll_interval": 1000,
+  "branch_prefix": "yourname/",
+  "copy_on_create": [".env", ".env.local", "config/secrets.json"]
+}
+```
+
+Files listed in `copy_on_create`:
+- Are copied from the main repository to each new workspace
+- Preserve their original file permissions
+- Will be skipped if they don't exist (no error)
+- Support relative paths from the repository root
+
+This is useful for:
+- Environment configuration files (`.env`, `.env.local`)
+- Local development settings
+- API keys and secrets needed for development
+- Any files that are gitignored but required for the code to run
 
 ### How It Works
 

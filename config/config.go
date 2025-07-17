@@ -36,6 +36,8 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// CopyOnCreate is a list of files/patterns to copy when creating new spaces
+	CopyOnCreate []string `json:"copy_on_create"`
 }
 
 // DefaultConfig returns the default configuration
@@ -58,6 +60,7 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
+		CopyOnCreate: []string{},
 	}
 }
 

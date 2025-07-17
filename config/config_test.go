@@ -108,6 +108,7 @@ func TestDefaultConfig(t *testing.T) {
 		assert.Equal(t, 1000, config.DaemonPollInterval)
 		assert.NotEmpty(t, config.BranchPrefix)
 		assert.True(t, strings.HasSuffix(config.BranchPrefix, "/"))
+		assert.Empty(t, config.CopyOnCreate)
 	})
 
 }
@@ -155,7 +156,8 @@ func TestLoadConfig(t *testing.T) {
 			"default_program": "test-claude",
 			"auto_yes": true,
 			"daemon_poll_interval": 2000,
-			"branch_prefix": "test/"
+			"branch_prefix": "test/",
+			"copy_on_create": [".env", ".env.local", "config/secrets.json"]
 		}`
 		err = os.WriteFile(configPath, []byte(configContent), 0644)
 		require.NoError(t, err)
@@ -172,6 +174,7 @@ func TestLoadConfig(t *testing.T) {
 		assert.True(t, config.AutoYes)
 		assert.Equal(t, 2000, config.DaemonPollInterval)
 		assert.Equal(t, "test/", config.BranchPrefix)
+		assert.Equal(t, []string{".env", ".env.local", "config/secrets.json"}, config.CopyOnCreate)
 	})
 
 	t.Run("returns default config on invalid JSON", func(t *testing.T) {
@@ -199,6 +202,7 @@ func TestLoadConfig(t *testing.T) {
 		assert.NotEmpty(t, config.DefaultProgram)
 		assert.False(t, config.AutoYes)                  // Default value
 		assert.Equal(t, 1000, config.DaemonPollInterval) // Default value
+		assert.Empty(t, config.CopyOnCreate)             // Default value
 	})
 }
 
@@ -218,6 +222,7 @@ func TestSaveConfig(t *testing.T) {
 			AutoYes:            true,
 			DaemonPollInterval: 3000,
 			BranchPrefix:       "test-branch/",
+			CopyOnCreate:       []string{".env", "config/local.json"},
 		}
 
 		err := SaveConfig(testConfig)
@@ -235,5 +240,6 @@ func TestSaveConfig(t *testing.T) {
 		assert.Equal(t, testConfig.AutoYes, loadedConfig.AutoYes)
 		assert.Equal(t, testConfig.DaemonPollInterval, loadedConfig.DaemonPollInterval)
 		assert.Equal(t, testConfig.BranchPrefix, loadedConfig.BranchPrefix)
+		assert.Equal(t, testConfig.CopyOnCreate, loadedConfig.CopyOnCreate)
 	})
 }
